@@ -60,26 +60,29 @@ class Estimator(nn.Module):
 class PolicyRunner:
     def __init__(self, env_cfg, agent_cfg, device=torch.device("cpu")):
 
-        self.cfg = agent_cfg
-        self.policy_cfg = self.cfg["policy"]
+        self.agent_cfg = agent_cfg
+        self.policy_cfg = self.agent_cfg["policy"]
         self.env_cfg = env_cfg
         self.device = device
+        self.estimator_cfg = agent_cfg["lin_vel_estimator"]
 
         #Parameter for our policy
         self.n_dim_cmd = 4  # =env._command.n_dim_cmd
         self.n_dim_proprio = env_cfg["n_dim_proprio"]
-        num_obs = self.n_dim_cmd * env_cfg["command"]["num_goals_in_cmd"] + self.n_dim_proprio + 3
-        num_critic_obs = num_obs
+        self.num_obs = self.n_dim_cmd * env_cfg["command"]["num_goals_in_cmd"] + self.n_dim_proprio
+        if self.estimator_cfg["train_lin_vel_estimator"]:
+            self.num_obs += agent_cfg["lin_vel_estimator"]["n_dim_output"]
+        num_critic_obs = self.num_obs
 
         # Initialize networks
         actor_critic_class = eval(self.policy_cfg.pop("class_name"))  # ActorCritic
         self.actor_critic: ActorCritic | ActorCriticRecurrent = actor_critic_class(
-            num_obs, num_critic_obs, self.env_cfg["action_space"], **self.policy_cfg
+            self.num_obs, num_critic_obs, self.env_cfg["action_space"], **self.policy_cfg
         ).to(self.device)
 
         # linear velocity estimator
-        self.estimator_cfg = agent_cfg["lin_vel_estimator"]
-        self.estimator = Estimator(input_dim=self.estimator_cfg["n_dim_input"], output_dim=self.estimator_cfg["n_dim_output"], hidden_dims=self.estimator_cfg["mlp_hidden_dims"]).to(self.device)
+        if self.estimator_cfg["train_lin_vel_estimator"]:
+            self.estimator = Estimator(input_dim=self.estimator_cfg["n_dim_input"], output_dim=self.estimator_cfg["n_dim_output"], hidden_dims=self.estimator_cfg["mlp_hidden_dims"]).to(self.device)
 
         # Initialize algorithm no need to initialize the PPO
         self.obs_normalizer = torch.nn.Identity().to(self.device)  # no normalization
@@ -101,7 +104,8 @@ class PolicyRunner:
     def load(self, path):
         loaded_dict = torch.load(path)
         self.actor_critic.load_state_dict(loaded_dict["model_state_dict"])
-        self.estimator.load_state_dict(loaded_dict["estimator_state_dict"])
+        if self.estimator_cfg["train_lin_vel_estimator"]:
+            self.estimator.load_state_dict(loaded_dict["estimator_state_dict"])
         return loaded_dict["infos"]
     
     def eval_mode(self):
